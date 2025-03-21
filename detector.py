@@ -50,24 +50,44 @@ def detector(model_fname, in_fname, out_fname=None):
     output = np.copy(arr * 255).astype(np.uint8)  # Convert back to uint8 for drawing
 
     # Sliding window parameters
-    step = 2
+    step = 10  # Увеличенный шаг
     win = 80
+    batch_size = 64  # Размер батча
 
-    # Loop through pixel positions
+    # Собираем все фрагменты в один список
+    chips = []
+    positions = []  # Сохраняем позиции для каждого фрагмента
+
     print("Обработка изображения...")
     for i in range(0, shape[0] - win, step):
         print(f"Обработка строки {i} из {shape[0] - win}")
 
         for j in range(0, shape[1] - win, step):
-            # Extract sub-chip
             chip = arr[i:i + win, j:j + win, :]
+            chips.append(chip)
+            positions.append((i, j))
 
-            # Predict chip label
-            prediction = model.predict(np.expand_dims(chip, axis=0), verbose=0)
-            predicted_label = np.argmax(prediction, axis=1)[0]
+            # Если набрался батч, делаем предсказание
+            if len(chips) == batch_size:
+                predictions = model.predict(np.array(chips), verbose=0)
+                predicted_labels = np.argmax(predictions, axis=1)
 
-            # Record positive detections
-            if predicted_label == 1:
+                # Обновляем detections
+                for (i, j), label in zip(positions, predicted_labels):
+                    if label == 1:
+                        detections[i + win // 2, j + win // 2] = 1
+
+                # Очищаем батч
+                chips = []
+                positions = []
+
+    # Обрабатываем оставшиеся фрагменты
+    if chips:
+        predictions = model.predict(np.array(chips), verbose=0)
+        predicted_labels = np.argmax(predictions, axis=1)
+
+        for (i, j), label in zip(positions, predicted_labels):
+            if label == 1:
                 detections[i + win // 2, j + win // 2] = 1
 
     # Process detection locations
