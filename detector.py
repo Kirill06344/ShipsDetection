@@ -1,90 +1,117 @@
-'''
-Apply trained machine learning model to an entire image scene using
-a sliding window.
-'''
+"""
+Apply trained machine learning model to an entire image scene using a sliding window.
+"""
 
 import sys
 import os
 import numpy as np
 from PIL import Image
-from scipy import ndimage
-from model import model
+from scipy.ndimage import binary_dilation, center_of_mass, label
+import tensorflow as tf
 
 
 def detector(model_fname, in_fname, out_fname=None):
-    """ Perform a sliding window detector on an image.
+    """
+    Perform a sliding window detector on an image.
 
     Args:
-        model_fname (str): Path to Tensorflow model file (.tfl)
+        model_fname (str): Path to Tensorflow model file (.h5 or .tflite)
         in_fname (str): Path to input image file
-        out_fname (str): Path to output image file. Default of None.
-
+        out_fname (str): Path to output image file. Default is None.
     """
 
-    # Load trained model
-    model.load(model_fname)
+    # Load the trained model
+    try:
+        model = tf.keras.models.load_model(model_fname)
+        print("Модель успешно загружена.")
+    except Exception as e:
+        print(f"Ошибка при загрузке модели: {e}")
+        sys.exit(1)
 
     # Read input image data
-    im = Image.open(in_fname)
-    arr = np.array(im)[:, :, 0:3]
-    shape = arr.shape
+    try:
+        im = Image.open(in_fname).convert("RGB")  # Ensure RGB format
+        arr = np.array(im) / 255.0  # Normalize pixel values to [0, 1]
+        shape = arr.shape
+        print(f"Изображение успешно загружено. Размер: {shape}")
+    except FileNotFoundError:
+        print(f"Ошибка: Файл {in_fname} не найден.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Ошибка при чтении изображения: {e}")
+        sys.exit(1)
 
-    # Set output fname
+    # Set output filename
     if not out_fname:
         out_fname = os.path.splitext(in_fname)[0] + '_detection.png'
 
     # Create detection variables
     detections = np.zeros((shape[0], shape[1]), dtype='uint8')
-    output = np.copy(arr)
+    output = np.copy(arr * 255).astype(np.uint8)  # Convert back to uint8 for drawing
 
     # Sliding window parameters
     step = 2
     win = 80
 
     # Loop through pixel positions
-    print('Processing...')
+    print("Обработка изображения...")
     for i in range(0, shape[0] - win, step):
-        print('row %1.0f of %1.0f' % (i, (shape[0] - win - 1)))
+        print(f"Обработка строки {i} из {shape[0] - win}")
 
         for j in range(0, shape[1] - win, step):
-
-            # Extract sub chip
+            # Extract sub-chip
             chip = arr[i:i + win, j:j + win, :]
 
             # Predict chip label
-            prediction = model.predict_label([chip / 255.])[0][0]
+            prediction = model.predict(np.expand_dims(chip, axis=0), verbose=0)
+            predicted_label = np.argmax(prediction, axis=1)[0]
 
             # Record positive detections
-            if prediction == 1:
-                detections[i + int(win / 2), j + int(win / 2)] = 1
+            if predicted_label == 1:
+                detections[i + win // 2, j + win // 2] = 1
 
     # Process detection locations
-    dilation = ndimage.binary_dilation(detections, structure=np.ones((3, 3)))
-    labels, n_labels = ndimage.label(dilation)
-    center_mass = ndimage.center_of_mass(dilation, labels, np.arange(n_labels) + 1)
+    dilation = binary_dilation(detections, structure=np.ones((3, 3)))
+    labels, n_labels = label(dilation)
+    centers_of_mass = center_of_mass(dilation, labels, np.arange(n_labels) + 1)
 
-    # Loop through detection locations
-    if type(center_mass) == tuple: center_mass = [center_mass]
-    for i, j in center_mass:
+    # Draw bounding boxes around detected regions
+    if isinstance(centers_of_mass, tuple):  # Handle single detection
+        centers_of_mass = [centers_of_mass]
+
+    for i, j in centers_of_mass:
         i = int(i - win / 2)
         j = int(j - win / 2)
 
-        # Draw bouding boxes in output array
-        output[i:i + win, j:j + 2, 0:3] = [255, 0, 0]
-        output[i:i + win, j + win - 2:j + win, 0:3] = [255, 0, 0]
-        output[i:i + 2, j:j + win, 0:3] = [255, 0, 0]
-        output[i + win - 2:i + win, j:j + win, 0:3] = [255, 0, 0]
+        # Ensure bounding box stays within image bounds
+        i = max(0, i)
+        j = max(0, j)
+        i_end = min(shape[0], i + win)
+        j_end = min(shape[1], j + win)
+
+        # Draw bounding box
+        output[i:i_end, j:j + 2, :] = [255, 0, 0]  # Left edge
+        output[i:i_end, j_end - 2:j_end, :] = [255, 0, 0]  # Right edge
+        output[i:i + 2, j:j_end, :] = [255, 0, 0]  # Top edge
+        output[i_end - 2:i_end, j:j_end, :] = [255, 0, 0]  # Bottom edge
 
     # Save output image
-    outIm = Image.fromarray(output)
-    outIm.save(out_fname)
+    try:
+        out_im = Image.fromarray(output)
+        out_im.save(out_fname)
+        print(f"Результат сохранен в файл: {out_fname}")
+    except Exception as e:
+        print(f"Ошибка при сохранении изображения: {e}")
 
 
 # Main function
 if __name__ == "__main__":
+    if len(sys.argv) < 3 or len(sys.argv) > 4:
+        print("Использование: python detector.py <model_file> <input_image> [output_image]")
+        sys.exit(1)
 
-    # Run detection function with command line inputs
-    if len(sys.argv) == 3:
-        detector(sys.argv[1], sys.argv[2])
-    else:
-        detector(sys.argv[1], sys.argv[2], sys.argv[3])
+    model_fname = sys.argv[1]
+    in_fname = sys.argv[2]
+    out_fname = sys.argv[3] if len(sys.argv) == 4 else None
+
+    detector(model_fname, in_fname, out_fname)
