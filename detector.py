@@ -6,7 +6,7 @@ import sys
 import os
 import numpy as np
 from PIL import Image
-from scipy.ndimage import binary_dilation, center_of_mass, label
+from scipy.ndimage import binary_dilation, center_of_mass, label as ndimage_label
 import tensorflow as tf
 
 
@@ -92,7 +92,7 @@ def detector(model_fname, in_fname, out_fname=None):
 
     # Process detection locations
     dilation = binary_dilation(detections, structure=np.ones((3, 3)))
-    labels, n_labels = label(dilation)
+    labels, n_labels = ndimage_label(dilation)
     centers_of_mass = center_of_mass(dilation, labels, np.arange(n_labels) + 1)
 
     # Draw bounding boxes around detected regions
